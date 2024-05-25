@@ -38,9 +38,10 @@ static http_request parse_request(size_t len, char bytes[len]) {
     };
 }
 
-static void handle_request(int server_fd, int* client_addr_len, struct sockaddr_in* client_addr) {
+static void handle_request(int server_fd, struct sockaddr_in* client_addr) {
     printf("Client connected\n");
-    int client_socket_fd = accept(server_fd, (struct sockaddr*) client_addr, client_addr_len);
+    socklen_t client_addr_len = sizeof(*client_addr);
+    int client_socket_fd = accept(server_fd, (struct sockaddr*) client_addr, &client_addr_len);
     char request_bytes[1024] = {0};
     const ssize_t read_n = read(client_socket_fd, request_bytes, sizeof(request_bytes));
     if (read_n <= 1) {
@@ -69,7 +70,7 @@ int main(void) {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     printf("Logs from your program will appear here!\n");
 
-    int server_fd, client_addr_len;
+    int server_fd;
     struct sockaddr_in client_addr;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -93,21 +94,20 @@ int main(void) {
 
     if (bind(server_fd, (struct sockaddr*) &serv_addr, sizeof(serv_addr)) != 0) {
         printf("Bind failed: %s \n", strerror(errno));
-        return 1;
+        return EXIT_FAILURE;
     }
 
     int connection_backlog = 5;
     if (listen(server_fd, connection_backlog) != 0) {
         printf("Listen failed: %s \n", strerror(errno));
-        return 1;
+        return EXIT_FAILURE;
     }
 
     printf("Waiting for a client to connect...\n");
-    client_addr_len = sizeof(client_addr);
 
-    handle_request(server_fd, &client_addr_len, &client_addr);
+    handle_request(server_fd, &client_addr);
 
     close(server_fd);
 
-    return 0;
+    return EXIT_SUCCESS;
 }
