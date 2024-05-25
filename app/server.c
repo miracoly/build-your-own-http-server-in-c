@@ -7,6 +7,61 @@
 #include <errno.h>
 #include <unistd.h>
 
+typedef enum {
+    GET,
+    POST,
+    HTTP_METHOD_NUM
+} http_method;
+
+char const* const method_to_string[HTTP_METHOD_NUM] = {
+        [GET] = "GET",
+        [POST] = "POST",
+};
+
+http_method to_method(const char method[static 1]) {
+    if (strcmp(method, "GET") == 0) return GET;
+    else if (strcmp(method, "POST") == 0) return POST;
+    else return -1;
+}
+
+typedef struct {
+    int method;
+    char* path;
+} http_request;
+
+static http_request parse_request(size_t len, char bytes[len]) {
+    char* method = strtok(bytes, " ");
+    char* path = strtok(NULL, " ");
+    return (http_request) {
+            .method = to_method(method),
+            .path = path
+    };
+}
+
+static void handle_request(int server_fd, int* client_addr_len, struct sockaddr_in* client_addr) {
+    printf("Client connected\n");
+    int client_socket_fd = accept(server_fd, (struct sockaddr*) client_addr, client_addr_len);
+    char request_bytes[1024] = {0};
+    const ssize_t read_n = read(client_socket_fd, request_bytes, sizeof(request_bytes));
+    if (read_n <= 1) {
+        const char error_msg[] = "HTTP/1.1 500 OK\r\n\r\n";
+        send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+        return;
+    }
+
+    const http_request request = parse_request(sizeof(request_bytes), request_bytes);
+    printf("Method: %s\n", method_to_string[request.method]);
+    printf("Path: %s\n", request.path);
+
+    if (strcmp(request.path, "/") == 0) {
+        const char success_msg[] = "HTTP/1.1 200 OK\r\n\r\n";
+        send(client_socket_fd, success_msg, sizeof(success_msg), 0);
+    } else {
+        const char error_msg[] = "HTTP/1.1 404 Not Found\r\n\r\n";
+        send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+    }
+}
+
 int main(void) {
     // Disable output buffering
     setbuf(stdout, NULL);
@@ -50,10 +105,7 @@ int main(void) {
     printf("Waiting for a client to connect...\n");
     client_addr_len = sizeof(client_addr);
 
-    int client_socket_fd = accept(server_fd, (struct sockaddr*) &client_addr, &client_addr_len);
-    const char success_msg[] = "HTTP/1.1 200 OK\r\n\r\n";
-    send(client_socket_fd, success_msg, sizeof(success_msg), 0);
-    printf("Client connected\n");
+    handle_request(server_fd, &client_addr_len, &client_addr);
 
     close(server_fd);
 
