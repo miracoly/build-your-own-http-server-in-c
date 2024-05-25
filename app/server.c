@@ -29,6 +29,18 @@ typedef struct {
     char* path;
 } http_request;
 
+typedef struct {
+    char* key;
+    char* value;
+} http_header;
+
+typedef struct {
+    uint16_t status_code;
+    size_t headers_len;
+    http_header* headers;
+    char body[];
+} http_response;
+
 static http_request parse_request(size_t len, char bytes[len]) {
     char* method = strtok(bytes, " ");
     char* path = strtok(NULL, " ");
@@ -38,7 +50,30 @@ static http_request parse_request(size_t len, char bytes[len]) {
     };
 }
 
-static void handle_request(int server_fd, struct sockaddr_in* client_addr) {
+static void handle_root(int client_socket_fd) {
+    const char success_msg[] = "HTTP/1.1 200 OK\r\n\r\n";
+    send(client_socket_fd, success_msg, sizeof(success_msg), 0);
+}
+
+static void handle_echo(int client_socket_fd, const http_request* request) {
+    if (strlen((*request).path) <= 6) {
+        const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+    } else {
+        const char* echo = (*request).path + 6;
+        size_t echo_len = strlen(echo);
+        char* msg = calloc(1024, sizeof(char));
+        sprintf(msg, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\n\r\n%s", echo_len, echo);
+        send(client_socket_fd, msg, strlen(msg), 0);
+    }
+}
+
+static void handle_unknown(int client_socket_fd) {
+    const char error_msg[] = "HTTP/1.1 404 Not Found\r\n\r\n";
+    send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+}
+
+static void handle_request(int server_fd, struct sockaddr_in client_addr[1]) {
     printf("Client connected\n");
     socklen_t client_addr_len = sizeof(*client_addr);
     int client_socket_fd = accept(server_fd, (struct sockaddr*) client_addr, &client_addr_len);
@@ -51,33 +86,13 @@ static void handle_request(int server_fd, struct sockaddr_in* client_addr) {
     }
 
     const http_request request = parse_request(sizeof(request_bytes), request_bytes);
-    printf("Method: %s\n", method_to_string[request.method]);
-    printf("Path: %s\n", request.path);
 
-    if (strcmp(request.path, "/") == 0) {
-        const char success_msg[] = "HTTP/1.1 200 OK\r\n\r\n";
-        send(client_socket_fd, success_msg, sizeof(success_msg), 0);
-    } else if (strncmp(request.path, "/echo/", 6) == 0) {
-        if (strlen(request.path) <= 6) {
-            const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
-            send(client_socket_fd, error_msg, sizeof(error_msg), 0);
-        } else {
-            const char* echo = request.path + 6;
-            size_t echo_len = strlen(echo);
-            printf("here\n");
-            char* msg = calloc(1024, sizeof(char));
-            printf("here\n");
-            sprintf(msg, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\n\r\n%s", echo_len, echo);
-            // debug print echo_len, echo and msg
-            printf("Echo length: %zu\n", echo_len);
-            printf("Echo: %s\n", echo);
-            printf("Message: %s\n", msg);
-            send(client_socket_fd, msg, strlen(msg), 0);
-        }
-    } else {
-        const char error_msg[] = "HTTP/1.1 404 Not Found\r\n\r\n";
-        send(client_socket_fd, error_msg, sizeof(error_msg), 0);
-    }
+    if (strcmp(request.path, "/") == 0)
+        handle_root(client_socket_fd);
+    else if (strncmp(request.path, "/echo/", 6) == 0)
+        handle_echo(client_socket_fd, &request);
+    else
+        handle_unknown(client_socket_fd);
 }
 
 int main(void) {
