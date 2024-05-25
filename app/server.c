@@ -57,6 +57,23 @@ static void handle_request(int server_fd, struct sockaddr_in* client_addr) {
     if (strcmp(request.path, "/") == 0) {
         const char success_msg[] = "HTTP/1.1 200 OK\r\n\r\n";
         send(client_socket_fd, success_msg, sizeof(success_msg), 0);
+    } else if (strncmp(request.path, "/echo/", 6) == 0) {
+        if (strlen(request.path) <= 6) {
+            const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+            send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+        } else {
+            const char* echo = request.path + 6;
+            size_t echo_len = strlen(echo);
+            printf("here\n");
+            char* msg = calloc(1024, sizeof(char));
+            printf("here\n");
+            sprintf(msg, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\n\r\n%s", echo_len, echo);
+            // debug print echo_len, echo and msg
+            printf("Echo length: %zu\n", echo_len);
+            printf("Echo: %s\n", echo);
+            printf("Message: %s\n", msg);
+            send(client_socket_fd, msg, strlen(msg), 0);
+        }
     } else {
         const char error_msg[] = "HTTP/1.1 404 Not Found\r\n\r\n";
         send(client_socket_fd, error_msg, sizeof(error_msg), 0);
