@@ -18,6 +18,21 @@ char const* const method_to_string[HTTP_METHOD_NUM] = {
         [POST] = "POST",
 };
 
+typedef enum {
+    OK = 200,
+    BAD_REQUEST = 400,
+    NOT_FOUND = 404,
+    INTERNAL_SERVER_ERROR = 500,
+    HTTP_STATUS_NUM
+} http_status;
+
+char const* const status_to_string[HTTP_STATUS_NUM] = {
+        [OK] = "OK",
+        [BAD_REQUEST] = "Bad Request",
+        [NOT_FOUND] = "Not Found",
+        [INTERNAL_SERVER_ERROR] = "Internal Server Error",
+};
+
 http_method to_method(const char method[static 1]) {
     if (strcmp(method, "GET") == 0) return GET;
     else if (strcmp(method, "POST") == 0) return POST;
@@ -30,16 +45,60 @@ typedef struct {
 } http_request;
 
 typedef struct {
-    char* key;
-    char* value;
+    const char* key;
+    const char* value;
 } http_header;
 
 typedef struct {
-    uint16_t status_code;
+    http_status status_code;
+    char body[512];
     size_t headers_len;
-    http_header* headers;
-    char body[];
+    http_header headers[];
 } http_response;
+
+http_response* response_create(http_status status) {
+    http_response* response = calloc(1, sizeof(http_response));
+    response->status_code = status;
+    return response;
+}
+
+http_response* response_add_body(http_response* response, const char body[static 1]) {
+    if (!response) return NULL;
+    strncpy(response->body, body, 511);
+    return response;
+}
+
+http_response*
+response_add_header(http_response* response, const char key[static 1], const char value[static 1]) {
+    if (!response) return NULL;
+    response = realloc(response,
+                       sizeof(http_response) + (response->headers_len + 1) * sizeof(http_header));
+    if (!response) return NULL;
+
+    response->headers[response->headers_len++] = (http_header) {
+            .key = key,
+            .value = value
+    };
+    return response;
+}
+
+char* response_serialize(http_response* response) {
+    if (!response) return NULL;
+
+    char* serialized = calloc(1024, sizeof(char));
+    sprintf(serialized, "HTTP/1.1 %d %s\r\n", response->status_code, status_to_string[response->status_code]);
+    for (size_t i = 0; i < response->headers_len; i++) {
+        sprintf(serialized + strlen(serialized), "%s: %s\r\n", response->headers[i].key,
+                response->headers[i].value);
+    }
+    sprintf(serialized + strlen(serialized), "\r\n%s", response->body);
+    return serialized;
+}
+
+void response_destroy(http_response* response) {
+    if (!response) return;
+    free(response);
+}
 
 static http_request parse_request(size_t len, char bytes[len]) {
     char* method = strtok(bytes, " ");
@@ -61,10 +120,17 @@ static void handle_echo(int client_socket_fd, const http_request* request) {
         send(client_socket_fd, error_msg, sizeof(error_msg), 0);
     } else {
         const char* echo = (*request).path + 6;
-        size_t echo_len = strlen(echo);
-        char* msg = calloc(1024, sizeof(char));
-        sprintf(msg, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\n\r\n%s", echo_len, echo);
-        send(client_socket_fd, msg, strlen(msg), 0);
+        const size_t echo_len = strlen(echo);
+        char echo_len_str[20];
+        sprintf(echo_len_str, "%zu", echo_len);
+        http_response* response = response_create(200);
+        response_add_header(response, "Content-Type", "text/plain");
+        response_add_header(response, "Content-Length", echo_len_str);
+        response_add_body(response, echo);
+        char* serialized = response_serialize(response);
+        printf("Echoing: %s\n", echo);
+        send(client_socket_fd, serialized, strlen(serialized), 0);
+        response_destroy(response);
     }
 }
 
