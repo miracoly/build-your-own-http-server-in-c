@@ -103,26 +103,39 @@ void response_destroy(http_response* response) {
     free(response);
 }
 
+/*
+ * GET
+ * /user-agent
+ * HTTP/1.1
+ * \r\n
+ *
+ * // Headers
+ * Host: localhost:4221\r\n
+ * User-Agent: foobar/1.2.3\r\n  // Read this value
+ * Accept: bla \r\n
+ * \r\n
+ */
 static http_request* parse_request(size_t len, char bytes[len]) {
     http_request* request = calloc(1, sizeof(http_request));
-    char* method = strtok(bytes, " ");
-    request->method = to_method(method);
+
+    request->method = to_method(strtok(bytes, " "));
     request->path = strtok(NULL, " ");
-    char* header = strtok(NULL, "\r\n");
-    while (header) {
+    strtok(NULL, "\r");
+    char* token = strtok(NULL, ":") + 1;
+    while (token) {
         request = realloc(request,
                           sizeof(http_request) + (request->headers_len + 1) * sizeof(http_header));
+        char* key = token;
+        char* pre_val = strtok(NULL, "\r");
+        if (!pre_val) break;
+        char* value = pre_val + 1;
         request->headers[request->headers_len++] = (http_header) {
-                .key = strtok(header, ": "),
-                .value = strtok(NULL, "\r\n")
+                .key = key,
+                .value = value
         };
-        header = strtok(NULL, "\r\n");
+        token = strtok(NULL, ":") + 1;
     }
 
-    for (size_t i = 0; i < request->headers_len; ++i) {
-        printf("Key: %s\n", request->headers[i].key);
-        printf("Value: %s\n", request->headers[i].value);
-    }
     return request;
 }
 
