@@ -149,7 +149,7 @@ static void handle_echo(int client_socket_fd, const http_request* request) {
         const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
         send(client_socket_fd, error_msg, sizeof(error_msg), 0);
     } else {
-        const char* echo = (*request).path + 6;
+        const char* echo = request->path + 6;
         const size_t echo_len = strlen(echo);
         char echo_len_str[20];
         sprintf(echo_len_str, "%zu", echo_len);
@@ -161,6 +161,42 @@ static void handle_echo(int client_socket_fd, const http_request* request) {
         printf("Echoing: %s\n", echo);
         send(client_socket_fd, serialized, strlen(serialized), 0);
         response_destroy(response);
+    }
+}
+
+static void
+handle_files(int client_socket_fd, const http_request* request, const char directory[100]) {
+    if (!request) return;
+    printf("File Directory: %s\n", directory);
+
+    if (strlen((*request).path) <= 7) {
+        const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+    } else {
+        const char* file_name = request->path + 7;
+        char file_path[200] = {0};
+        sprintf(file_path, "%s/%s", directory, file_name);
+        FILE* file = fopen(file_path, "r");
+        if (!file) {
+            http_response* response = response_create(404);
+            response_add_header(response, "Content-Type", "application/octet-stream");
+            const char* serialized = response_serialize(response);
+            send(client_socket_fd, serialized, strlen(serialized), 0);
+        } else {
+            http_response* response = response_create(200);
+            response_add_header(response, "Content-Type", "application/octet-stream");
+            char body[1024] = {0};
+            const size_t body_len = fread(body, 1, sizeof(body), file);
+            char body_len_str[20];
+            sprintf(body_len_str, "%zu", body_len);
+            fclose(file);
+            response_add_header(response, "Content-Length", body_len_str);
+            response_add_body(response, body);
+            char* serialized = response_serialize(response);
+            printf("File Content: %s\n", body);
+            send(client_socket_fd, serialized, strlen(serialized), 0);
+            response_destroy(response);
+        }
     }
 }
 
@@ -191,7 +227,7 @@ static void handle_unknown(int client_socket_fd) {
     send(client_socket_fd, error_msg, sizeof(error_msg), 0);
 }
 
-static void handle_request(int client_socket_fd) {
+static void handle_request(int client_socket_fd, const char directory[100]) {
     printf("Client connected\n");
     char request_bytes[1024] = {0};
     const ssize_t read_n = read(client_socket_fd, request_bytes, sizeof(request_bytes));
@@ -201,7 +237,7 @@ static void handle_request(int client_socket_fd) {
         return;
     }
 
-    const http_request* request = parse_request(sizeof(request_bytes), request_bytes);
+    http_request* request = parse_request(sizeof(request_bytes), request_bytes);
 
     if (strcmp(request->path, "/") == 0)
         handle_root(client_socket_fd);
@@ -209,18 +245,35 @@ static void handle_request(int client_socket_fd) {
         handle_echo(client_socket_fd, request);
     else if (strncmp(request->path, "/user-agent", 11) == 0)
         handle_user_agent(client_socket_fd, request);
+    else if (strncmp(request->path, "/files/", 7) == 0)
+        handle_files(client_socket_fd, request, directory);
     else
         handle_unknown(client_socket_fd);
+
+    free(request);
 }
 
+typedef struct {
+    int client_socket_fd;
+    char directory[100];
+} handle_concurrently_args;
+
 static int handle_concurrently(void* args) {
-    int client_socket_fd = *(int*) (args);
-    handle_request(client_socket_fd);
-    close(client_socket_fd);
+    handle_concurrently_args* handle_args = (handle_concurrently_args*) args;
+    printf("Handling client %d\n", handle_args->client_socket_fd);
+    printf("Directory: %s\n", handle_args->directory);
+    handle_request(handle_args->client_socket_fd, handle_args->directory);
+    close(handle_args->client_socket_fd);
     return 0;
 }
 
-int main(void) {
+int main(int argc, char* argv[]) {
+    char directory[100] = {0};
+    if (argc > 1) {
+        strncpy(directory, argv[2], sizeof(directory));
+        directory[sizeof(directory) - 1] = '\0';
+        printf("Directory: %s\n", directory);
+    }
     // Disable output buffering
     setbuf(stdout, NULL);
 
@@ -228,7 +281,6 @@ int main(void) {
     printf("Logs from your program will appear here!\n");
 
     int server_fd;
-    struct sockaddr_in client_addr;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
@@ -264,9 +316,14 @@ int main(void) {
 
     while (1) {
         thrd_t thread;
+        struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
         int client_socket_fd = accept(server_fd, (struct sockaddr*) &client_addr, &client_addr_len);
-        thrd_create(&thread, handle_concurrently, &client_socket_fd);
+        handle_concurrently_args* args = calloc(1, sizeof(handle_concurrently_args));
+        args->client_socket_fd = client_socket_fd;
+        strncpy(args->directory, directory, sizeof(directory));
+        args->directory[sizeof(directory) - 1] = '\0';
+        thrd_create(&thread, handle_concurrently, args);
         thrd_detach(thread);
     }
 
