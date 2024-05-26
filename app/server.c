@@ -260,10 +260,9 @@ typedef struct {
 
 static int handle_concurrently(void* args) {
     handle_concurrently_args* handle_args = (handle_concurrently_args*) args;
-    printf("Handling client %d\n", handle_args->client_socket_fd);
-    printf("Directory: %s\n", handle_args->directory);
     handle_request(handle_args->client_socket_fd, handle_args->directory);
     close(handle_args->client_socket_fd);
+    free(handle_args);
     return 0;
 }
 
