@@ -6,6 +6,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <threads.h>
 
 typedef enum {
     GET,
@@ -202,10 +203,8 @@ static void handle_unknown(int client_socket_fd) {
     send(client_socket_fd, error_msg, sizeof(error_msg), 0);
 }
 
-static void handle_request(int server_fd, struct sockaddr_in client_addr[1]) {
+static void handle_request(int client_socket_fd) {
     printf("Client connected\n");
-    socklen_t client_addr_len = sizeof(*client_addr);
-    int client_socket_fd = accept(server_fd, (struct sockaddr*) client_addr, &client_addr_len);
     char request_bytes[1024] = {0};
     const ssize_t read_n = read(client_socket_fd, request_bytes, sizeof(request_bytes));
     if (read_n <= 1) {
@@ -224,6 +223,12 @@ static void handle_request(int server_fd, struct sockaddr_in client_addr[1]) {
         handle_user_agent(client_socket_fd, request);
     else
         handle_unknown(client_socket_fd);
+}
+
+static int handle_concurrently(void* args) {
+    int client_socket_fd = *(int*) (args);
+    handle_request(client_socket_fd);
+    return 0;
 }
 
 int main(void) {
@@ -268,7 +273,13 @@ int main(void) {
 
     printf("Waiting for a client to connect...\n");
 
-    handle_request(server_fd, &client_addr);
+    while (1) {
+        thrd_t thread;
+        socklen_t client_addr_len = sizeof(client_addr);
+        int client_socket_fd = accept(server_fd, (struct sockaddr*) &client_addr, &client_addr_len);
+        thrd_create(&thread, handle_concurrently, &client_socket_fd);
+        thrd_detach(thread);
+    }
 
     close(server_fd);
 
