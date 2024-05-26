@@ -217,7 +217,6 @@ static int handle_concurrently(void* args) {
     int client_socket_fd = *(int*) (args);
     handle_request(client_socket_fd);
     close(client_socket_fd);
-    thread_count = thread_count == 0 ? 0 : thread_count - 1;
     return 0;
 }
 
