@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <threads.h>
 
+char *strtok_r(char *str, const char *delim, char **saveptr);
+
 typedef enum {
     GET,
     POST,
@@ -21,6 +23,7 @@ char const* const method_to_string[HTTP_METHOD_NUM] = {
 
 typedef enum {
     OK = 200,
+    CREATED = 201,
     BAD_REQUEST = 400,
     NOT_FOUND = 404,
     INTERNAL_SERVER_ERROR = 500,
@@ -29,6 +32,7 @@ typedef enum {
 
 char const* const status_to_string[HTTP_STATUS_NUM] = {
         [OK] = "OK",
+        [CREATED] = "Created",
         [BAD_REQUEST] = "Bad Request",
         [NOT_FOUND] = "Not Found",
         [INTERNAL_SERVER_ERROR] = "Internal Server Error",
@@ -46,8 +50,10 @@ typedef struct {
 } http_header;
 
 typedef struct {
-    int method;
+    http_method method;
     char* path;
+    size_t body_len;
+    char* body;
     size_t headers_len;
     http_header headers[];
 } http_request;
@@ -107,22 +113,28 @@ void response_destroy(http_response* response) {
 static http_request* parse_request(size_t len, char bytes[len]) {
     http_request* request = calloc(1, sizeof(http_request));
 
-    request->method = to_method(strtok(bytes, " "));
-    request->path = strtok(NULL, " ");
-    strtok(NULL, "\r");
-    char* token = strtok(NULL, ":") + 1;
+    char* current = 0;
+    request->method = to_method(strtok_r(bytes, " ", &current));
+    request->path = strtok_r(NULL, " ", &current);
+    strtok_r(NULL, "\r", &current);
+    char* token = strtok_r(NULL, ":", &current) + 1;
     while (token) {
         request = realloc(request,
                           sizeof(http_request) + (request->headers_len + 1) * sizeof(http_header));
         char* key = token;
-        char* pre_val = strtok(NULL, "\r");
-        if (!pre_val) break;
+        char* pre_val = strtok_r(NULL, "\r", &current);
         char* value = pre_val + 1;
         request->headers[request->headers_len++] = (http_header) {
                 .key = key,
                 .value = value
         };
-        token = strtok(NULL, ":") + 1;
+        token = strtok_r(NULL, ":", &current) + 1;
+        if (*token == '\r') break;
+    }
+
+    if (token) {
+        request->body = token + 2;
+        request->body_len = strlen(request->body);
     }
 
     return request;
@@ -153,7 +165,7 @@ static void handle_echo(int client_socket_fd, const http_request* request) {
         const size_t echo_len = strlen(echo);
         char echo_len_str[20];
         sprintf(echo_len_str, "%zu", echo_len);
-        http_response* response = response_create(200);
+        http_response* response = response_create(OK);
         response_add_header(response, "Content-Type", "text/plain");
         response_add_header(response, "Content-Length", echo_len_str);
         response_add_body(response, echo);
@@ -165,9 +177,8 @@ static void handle_echo(int client_socket_fd, const http_request* request) {
 }
 
 static void
-handle_files(int client_socket_fd, const http_request* request, const char directory[100]) {
+handle_get_file(int client_socket_fd, const http_request* request, const char directory[100]) {
     if (!request) return;
-    printf("File Directory: %s\n", directory);
 
     if (strlen((*request).path) <= 7) {
         const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
@@ -178,25 +189,59 @@ handle_files(int client_socket_fd, const http_request* request, const char direc
         sprintf(file_path, "%s/%s", directory, file_name);
         FILE* file = fopen(file_path, "r");
         if (!file) {
-            http_response* response = response_create(404);
+            http_response* response = response_create(NOT_FOUND);
             response_add_header(response, "Content-Type", "application/octet-stream");
             const char* serialized = response_serialize(response);
             send(client_socket_fd, serialized, strlen(serialized), 0);
+            response_destroy(response);
         } else {
-            http_response* response = response_create(200);
+            http_response* response = response_create(OK);
             response_add_header(response, "Content-Type", "application/octet-stream");
             char body[1024] = {0};
             const size_t body_len = fread(body, 1, sizeof(body), file);
             char body_len_str[20];
             sprintf(body_len_str, "%zu", body_len);
-            fclose(file);
             response_add_header(response, "Content-Length", body_len_str);
             response_add_body(response, body);
             char* serialized = response_serialize(response);
-            printf("File Content: %s\n", body);
             send(client_socket_fd, serialized, strlen(serialized), 0);
             response_destroy(response);
         }
+        fclose(file);
+    }
+}
+
+static void
+handle_create_file(int client_socket_fd, const http_request* request, const char directory[100]) {
+    if (!request) return;
+
+    printf("0\n");
+    if (strlen((*request).path) <= 7) {
+        const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+    } else {
+        const char* file_name = request->path + 7;
+        char file_path[200] = {0};
+        sprintf(file_path, "%s/%s", directory, file_name);
+        FILE* file = fopen(file_path, "w");
+        printf("1\n");
+        if (!file) {
+            printf("2\n");
+            http_response* response = response_create(INTERNAL_SERVER_ERROR);
+            response_add_header(response, "Content-Type", "application/octet-stream");
+            const char* serialized = response_serialize(response);
+            send(client_socket_fd, serialized, strlen(serialized), 0);
+            response_destroy(response);
+        } else {
+            printf("3\n");
+            fwrite(request->body, 1, request->body_len, file);
+            http_response* response = response_create(CREATED);
+            response_add_header(response, "Content-Length", "0");
+            char* serialized = response_serialize(response);
+            send(client_socket_fd, serialized, strlen(serialized), 0);
+            response_destroy(response);
+        }
+        fclose(file);
     }
 }
 
@@ -238,6 +283,7 @@ static void handle_request(int client_socket_fd, const char directory[100]) {
     }
 
     http_request* request = parse_request(sizeof(request_bytes), request_bytes);
+    printf("Request: %s %s\n", method_to_string[request->method], request->path);
 
     if (strcmp(request->path, "/") == 0)
         handle_root(client_socket_fd);
@@ -245,8 +291,10 @@ static void handle_request(int client_socket_fd, const char directory[100]) {
         handle_echo(client_socket_fd, request);
     else if (strncmp(request->path, "/user-agent", 11) == 0)
         handle_user_agent(client_socket_fd, request);
-    else if (strncmp(request->path, "/files/", 7) == 0)
-        handle_files(client_socket_fd, request, directory);
+    else if (strncmp(request->path, "/files/", 7) == 0 && request->method == GET)
+        handle_get_file(client_socket_fd, request, directory);
+    else if (strncmp(request->path, "/files/", 7) == 0 && request->method == POST)
+        handle_create_file(client_socket_fd, request, directory);
     else
         handle_unknown(client_socket_fd);
 
