@@ -4,5 +4,6 @@ pkgs.mkShell {
         gnumake
         gcc
         curlFull.dev
+        oha
     ];
 }

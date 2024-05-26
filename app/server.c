@@ -104,18 +104,6 @@ void response_destroy(http_response* response) {
     free(response);
 }
 
-/*
- * GET
- * /user-agent
- * HTTP/1.1
- * \r\n
- *
- * // Headers
- * Host: localhost:4221\r\n
- * User-Agent: foobar/1.2.3\r\n  // Read this value
- * Accept: bla \r\n
- * \r\n
- */
 static http_request* parse_request(size_t len, char bytes[len]) {
     http_request* request = calloc(1, sizeof(http_request));
 
@@ -228,6 +216,8 @@ static void handle_request(int client_socket_fd) {
 static int handle_concurrently(void* args) {
     int client_socket_fd = *(int*) (args);
     handle_request(client_socket_fd);
+    close(client_socket_fd);
+    thread_count = thread_count == 0 ? 0 : thread_count - 1;
     return 0;
 }
 
