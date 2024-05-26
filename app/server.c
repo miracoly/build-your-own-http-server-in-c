@@ -40,14 +40,16 @@ http_method to_method(const char method[static 1]) {
 }
 
 typedef struct {
-    int method;
-    char* path;
-} http_request;
-
-typedef struct {
     const char* key;
     const char* value;
 } http_header;
+
+typedef struct {
+    int method;
+    char* path;
+    size_t headers_len;
+    http_header headers[];
+} http_request;
 
 typedef struct {
     http_status status_code;
@@ -86,7 +88,8 @@ char* response_serialize(http_response* response) {
     if (!response) return NULL;
 
     char* serialized = calloc(1024, sizeof(char));
-    sprintf(serialized, "HTTP/1.1 %d %s\r\n", response->status_code, status_to_string[response->status_code]);
+    sprintf(serialized, "HTTP/1.1 %d %s\r\n", response->status_code,
+            status_to_string[response->status_code]);
     for (size_t i = 0; i < response->headers_len; i++) {
         sprintf(serialized + strlen(serialized), "%s: %s\r\n", response->headers[i].key,
                 response->headers[i].value);
@@ -100,13 +103,36 @@ void response_destroy(http_response* response) {
     free(response);
 }
 
-static http_request parse_request(size_t len, char bytes[len]) {
+static http_request* parse_request(size_t len, char bytes[len]) {
+    http_request* request = calloc(1, sizeof(http_request));
     char* method = strtok(bytes, " ");
-    char* path = strtok(NULL, " ");
-    return (http_request) {
-            .method = to_method(method),
-            .path = path
-    };
+    request->method = to_method(method);
+    request->path = strtok(NULL, " ");
+    char* header = strtok(NULL, "\r\n");
+    while (header) {
+        request = realloc(request,
+                          sizeof(http_request) + (request->headers_len + 1) * sizeof(http_header));
+        request->headers[request->headers_len++] = (http_header) {
+                .key = strtok(header, ": "),
+                .value = strtok(NULL, "\r\n")
+        };
+        header = strtok(NULL, "\r\n");
+    }
+
+    for (size_t i = 0; i < request->headers_len; ++i) {
+        printf("Key: %s\n", request->headers[i].key);
+        printf("Value: %s\n", request->headers[i].value);
+    }
+    return request;
+}
+
+static const char* get_header(const http_request* request, const char key[static 1]) {
+    for (size_t i = 0; i < request->headers_len; i++) {
+        if (strcmp(request->headers[i].key, key) == 0) {
+            return request->headers[i].value;
+        }
+    }
+    return NULL;
 }
 
 static void handle_root(int client_socket_fd) {
@@ -115,6 +141,8 @@ static void handle_root(int client_socket_fd) {
 }
 
 static void handle_echo(int client_socket_fd, const http_request* request) {
+    if (!request) return;
+
     if (strlen((*request).path) <= 6) {
         const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
         send(client_socket_fd, error_msg, sizeof(error_msg), 0);
@@ -129,6 +157,28 @@ static void handle_echo(int client_socket_fd, const http_request* request) {
         response_add_body(response, echo);
         char* serialized = response_serialize(response);
         printf("Echoing: %s\n", echo);
+        send(client_socket_fd, serialized, strlen(serialized), 0);
+        response_destroy(response);
+    }
+}
+
+static void handle_user_agent(int client_socket_fd, const http_request* request) {
+    if (!request) return;
+
+    const char* user_agent = get_header(request, "User-Agent");
+
+    if (!user_agent || strlen(request->path) > 11) {
+        const char error_msg[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        send(client_socket_fd, error_msg, sizeof(error_msg), 0);
+    } else {
+        const size_t user_agent_len = strlen(user_agent);
+        char user_agent_len_str[20] = {0};
+        sprintf(user_agent_len_str, "%zu", user_agent_len);
+        http_response* response = response_create(OK);
+        response_add_header(response, "Content-Type", "text/plain");
+        response_add_header(response, "Content-Length", user_agent_len_str);
+        response_add_body(response, user_agent);
+        const char* serialized = response_serialize(response);
         send(client_socket_fd, serialized, strlen(serialized), 0);
         response_destroy(response);
     }
@@ -151,12 +201,14 @@ static void handle_request(int server_fd, struct sockaddr_in client_addr[1]) {
         return;
     }
 
-    const http_request request = parse_request(sizeof(request_bytes), request_bytes);
+    const http_request* request = parse_request(sizeof(request_bytes), request_bytes);
 
-    if (strcmp(request.path, "/") == 0)
+    if (strcmp(request->path, "/") == 0)
         handle_root(client_socket_fd);
-    else if (strncmp(request.path, "/echo/", 6) == 0)
-        handle_echo(client_socket_fd, &request);
+    else if (strncmp(request->path, "/echo/", 6) == 0)
+        handle_echo(client_socket_fd, request);
+    else if (strncmp(request->path, "/user-agent", 11) == 0)
+        handle_user_agent(client_socket_fd, request);
     else
         handle_unknown(client_socket_fd);
 }
